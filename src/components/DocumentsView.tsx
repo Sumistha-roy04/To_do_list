@@ -4,6 +4,7 @@ import {
   Upload, Link as LinkIcon, Image as ImageIcon, Mic, MicOff, Play, Pause, FileText, 
   ExternalLink, User, Download, AlertCircle, FileAudio
 } from 'lucide-react';
+import { getBackendUrl, getWsUrl } from '../utils/api';
 
 interface DocumentData {
   docId: string;
@@ -48,7 +49,7 @@ export const DocumentsView: React.FC = () => {
   // Fetch documents
   const fetchDocuments = async () => {
     try {
-      const res = await fetch(`/api/collaboration/documents?roomCode=${roomCode}`);
+      const res = await fetch(`${getBackendUrl()}/api/collaboration/documents?roomCode=${roomCode}`);
       if (res.ok) {
         const data = await res.json();
         setDocuments(data);
@@ -67,9 +68,7 @@ export const DocumentsView: React.FC = () => {
   // Connect WebSockets
   useEffect(() => {
     if (!roomCode) return;
-    const wsHost = window.location.port ? `${window.location.hostname}:5000` : window.location.host;
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${wsHost}`;
+    const wsUrl = getWsUrl();
 
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
@@ -208,7 +207,7 @@ export const DocumentsView: React.FC = () => {
     };
 
     try {
-      const res = await fetch('/api/collaboration/documents', {
+      const res = await fetch(`${getBackendUrl()}/api/collaboration/documents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(docPayload)

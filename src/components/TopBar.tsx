@@ -3,6 +3,7 @@ import { useKanbanStore } from '../store/useKanbanStore';
 import { parseEmployeeExcel } from '../utils/excelParser';
 import { Sun, Moon, Upload, Plus, Search, Layers, Calendar, LayoutGrid, LogOut } from 'lucide-react';
 import clsx from 'clsx';
+import { getBackendUrl } from '../utils/api';
 
 interface TopBarProps {
   onOpenTaskModal?: () => void;
@@ -34,7 +35,7 @@ export const TopBar: React.FC<TopBarProps> = ({ onOpenTaskModal }) => {
         const parsedEmployees = await parseEmployeeExcel(file);
         
         if (user && user.role !== 'member' && user.roomCode) {
-          const res = await fetch('/api/leader/import-members', {
+          const res = await fetch(`${getBackendUrl()}/api/leader/import-members`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

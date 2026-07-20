@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useKanbanStore } from '../store/useKanbanStore';
 import { Send, Users, Search, MessageSquare, AlertCircle, Smile } from 'lucide-react';
+import { getBackendUrl, getWsUrl } from '../utils/api';
 
 interface ChatMsg {
   senderName: string;
@@ -52,7 +53,7 @@ export const ChatView: React.FC = () => {
   useEffect(() => {
     const fetchChatHistory = async () => {
       try {
-        const res = await fetch(`/api/collaboration/chat?roomCode=${roomCode}`);
+        const res = await fetch(`${getBackendUrl()}/api/collaboration/chat?roomCode=${roomCode}`);
         if (res.ok) {
           const data = await res.ok ? await res.json() : [];
           setMessages(data);
@@ -70,9 +71,7 @@ export const ChatView: React.FC = () => {
   useEffect(() => {
     if (!roomCode || !user) return;
 
-    const wsHost = window.location.port ? `${window.location.hostname}:5000` : window.location.host;
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${wsHost}`;
+    const wsUrl = getWsUrl();
 
     let socket: WebSocket;
     let reconnectTimeout: number;

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useKanbanStore } from '../store/useKanbanStore';
 import { Mail, Building2, Lock, Eye, EyeOff, ArrowRight, Shield, BarChart3, ArrowLeft } from 'lucide-react';
 import clsx from 'clsx';
+import { getBackendUrl } from '../utils/api';
 
 interface RegisterViewProps {
   onToggleLogin: () => void;
@@ -36,7 +37,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({ onToggleLogin, onBac
     setErrors({});
 
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await fetch(`${getBackendUrl()}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fullName, email, orgName, password })

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useKanbanStore } from '../store/useKanbanStore';
 import { Mail, Lock, Eye, EyeOff, LogIn, ArrowLeft } from 'lucide-react';
+import { getBackendUrl } from '../utils/api';
 
 interface LoginViewProps {
   onToggleRegister: () => void;
@@ -27,7 +28,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onToggleRegister, onBackTo
     setError('');
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(`${getBackendUrl()}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })

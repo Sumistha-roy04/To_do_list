@@ -4,6 +4,7 @@ import {
   Video, VideoOff, Mic, MicOff, ScreenShare, PhoneOff, Calendar, Clock, Plus, 
   Play, CheckCircle2, Video as VideoIcon, User, AlertCircle
 } from 'lucide-react';
+import { getBackendUrl, getWsUrl } from '../utils/api';
 
 interface Meeting {
   meetingId: string;
@@ -42,7 +43,7 @@ export const MeetingsView: React.FC = () => {
   // Fetch Meetings
   const fetchMeetings = async () => {
     try {
-      const res = await fetch(`/api/collaboration/meetings?roomCode=${roomCode}`);
+      const res = await fetch(`${getBackendUrl()}/api/collaboration/meetings?roomCode=${roomCode}`);
       if (res.ok) {
         const data = await res.json();
         setMeetings(data);
@@ -61,9 +62,7 @@ export const MeetingsView: React.FC = () => {
   // Connect WebSockets for live meeting updates
   useEffect(() => {
     if (!roomCode) return;
-    const wsHost = window.location.port ? `${window.location.hostname}:5000` : window.location.host;
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${wsHost}`;
+    const wsUrl = getWsUrl();
 
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
@@ -173,7 +172,7 @@ export const MeetingsView: React.FC = () => {
     // Update status to Live if it's upcoming
     if (meeting.status === 'upcoming') {
       try {
-        await fetch('/api/collaboration/meetings/status', {
+        await fetch(`${getBackendUrl()}/api/collaboration/meetings/status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ meetingId: meeting.meetingId, status: 'live' })
@@ -194,7 +193,7 @@ export const MeetingsView: React.FC = () => {
     if (activeCallMeeting && activeCallMeeting.status === 'live') {
       // Completed meeting status update
       try {
-        await fetch('/api/collaboration/meetings/status', {
+        await fetch(`${getBackendUrl()}/api/collaboration/meetings/status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ meetingId: activeCallMeeting.meetingId, status: 'completed' })
@@ -215,7 +214,7 @@ export const MeetingsView: React.FC = () => {
     const meetingId = 'meet_' + Math.random().toString(36).substring(2, 9);
     
     try {
-      const res = await fetch('/api/collaboration/meetings', {
+      const res = await fetch(`${getBackendUrl()}/api/collaboration/meetings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

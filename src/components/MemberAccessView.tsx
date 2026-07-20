@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useKanbanStore } from '../store/useKanbanStore';
 import { LogIn, ArrowLeft, Mail, ShieldAlert } from 'lucide-react';
+import { getBackendUrl } from '../utils/api';
 
 interface MemberAccessViewProps {
   onBackToWelcome: () => void;
@@ -25,7 +26,7 @@ export const MemberAccessView: React.FC<MemberAccessViewProps> = ({ onBackToWelc
     setError('');
 
     try {
-      const res = await fetch('/api/auth/member-login', {
+      const res = await fetch(`${getBackendUrl()}/api/auth/member-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
