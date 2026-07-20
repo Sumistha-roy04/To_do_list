@@ -50,7 +50,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onToggleRegister, onBackTo
         registerUser({
           fullName: 'Alexander Pierce',
           email,
-          orgName: 'Acme Enterprise'
+          orgName: 'Acme Enterprise',
+          roomCode: '852934',
+          role: 'leader'
         });
       }, 800);
     } finally {

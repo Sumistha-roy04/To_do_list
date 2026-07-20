@@ -63,7 +63,9 @@ export const RegisterView: React.FC<RegisterViewProps> = ({ onToggleLogin, onBac
     const mockUser = {
       fullName: provider === 'Login' ? 'Alexander Pierce' : `${provider} Leader`,
       email: `${provider.toLowerCase()}@acme-enterprise.com`,
-      orgName: orgName || 'Acme Enterprise'
+      orgName: orgName || 'Acme Enterprise',
+      roomCode: '852934',
+      role: 'leader'
     };
     registerUser(mockUser);
   };
