@@ -192,8 +192,8 @@ export const Board: React.FC = () => {
 
   // Filter tasks
   const filteredTasks = tasks.filter(task => {
-    // If user is a Member, restrict view to tasks assigned to them
-    if (user && user.role === 'member' && task.assignedTo !== user.fullName) {
+    // If user is a Member, restrict view to tasks assigned to them (case-insensitive)
+    if (user && user.role === 'member' && task.assignedTo.toLowerCase() !== user.fullName.toLowerCase()) {
       return false;
     }
 
@@ -227,8 +227,8 @@ export const Board: React.FC = () => {
 
   // Filter tasks for calendar (ignore dateFilter, but respect search and assignee)
   const calendarFilteredTasks = tasks.filter(task => {
-    // If user is a Member, restrict view to tasks assigned to them
-    if (user && user.role === 'member' && task.assignedTo !== user.fullName) {
+    // If user is a Member, restrict view to tasks assigned to them (case-insensitive)
+    if (user && user.role === 'member' && task.assignedTo.toLowerCase() !== user.fullName.toLowerCase()) {
       return false;
     }
 

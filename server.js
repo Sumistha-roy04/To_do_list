@@ -87,6 +87,7 @@ const teamMemberSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true },
   roomCode: { type: String, required: true },
+  role: { type: String, default: 'Team Member' },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -401,8 +402,10 @@ app.post('/api/leader/import-members', async (req, res) => {
       }
 
       users[userIndex].members = members.map(m => ({
+        id: m.email.toLowerCase(),
         name: m.name,
-        email: m.email
+        email: m.email.toLowerCase(),
+        role: m.role || 'Team Member'
       }));
 
       fs.writeFileSync(MOCK_DB_FILE, JSON.stringify({ users }, null, 2));
@@ -421,6 +424,7 @@ app.post('/api/leader/import-members', async (req, res) => {
       const membersToInsert = members.map(m => ({
         name: m.name,
         email: m.email.toLowerCase(),
+        role: m.role || 'Team Member',
         roomCode
       }));
 
@@ -758,10 +762,10 @@ app.get('/api/leader/members', async (req, res) => {
       const data = getMockData();
       const users = data.users.find(u => u.roomCode === roomCode);
       const members = users?.members || [];
-      return res.status(200).json(members);
+      return res.status(200).json(members.map(m => ({ id: m.id || m.email, name: m.name, email: m.email, role: m.role || 'Team Member' })));
     } else {
       const members = await TeamMember.find({ roomCode });
-      return res.status(200).json(members.map(m => ({ name: m.name, email: m.email })));
+      return res.status(200).json(members.map(m => ({ id: m.email, name: m.name, email: m.email, role: m.role || 'Team Member' })));
     }
   } catch (error) {
     console.error('Fetch members error:', error);
@@ -775,35 +779,35 @@ app.post('/api/leader/add-member', async (req, res) => {
   if (!name || !email || !roomCode) {
     return res.status(400).json({ error: 'name, email, and roomCode are required' });
   }
-  try {
-    const memberData = { name, email: email.toLowerCase(), roomCode };
-    if (useMockDb) {
-      const data = getMockData();
-      const leaderIdx = data.users.findIndex(u => u.roomCode === roomCode);
-      if (leaderIdx === -1) {
-        return res.status(404).json({ error: 'Leader not found' });
+      const role = req.body.role || 'Team Member';
+      const memberData = { name, email: email.toLowerCase(), role, roomCode };
+      if (useMockDb) {
+        const data = getMockData();
+        const leaderIdx = data.users.findIndex(u => u.roomCode === roomCode);
+        if (leaderIdx === -1) {
+          return res.status(404).json({ error: 'Leader not found' });
+        }
+        if (!data.users[leaderIdx].members) data.users[leaderIdx].members = [];
+        
+        const exists = data.users[leaderIdx].members.some(m => m.email.toLowerCase() === email.toLowerCase());
+        if (exists) {
+          return res.status(400).json({ error: 'Member already exists under this room code' });
+        }
+        
+        data.users[leaderIdx].members.push({ id: email.toLowerCase(), name, email: email.toLowerCase(), role });
+        saveMockData(data);
+        broadcastToRoom(roomCode, { type: 'member_update' });
+        return res.status(201).json({ id: email.toLowerCase(), name, email: email.toLowerCase(), role });
+      } else {
+        const exists = await TeamMember.findOne({ email: email.toLowerCase(), roomCode });
+        if (exists) {
+          return res.status(400).json({ error: 'Member already exists under this room code' });
+        }
+        const newMember = new TeamMember(memberData);
+        await newMember.save();
+        broadcastToRoom(roomCode, { type: 'member_update' });
+        return res.status(201).json({ id: newMember.email, name: newMember.name, email: newMember.email, role: newMember.role });
       }
-      if (!data.users[leaderIdx].members) data.users[leaderIdx].members = [];
-      
-      const exists = data.users[leaderIdx].members.some(m => m.email.toLowerCase() === email.toLowerCase());
-      if (exists) {
-        return res.status(400).json({ error: 'Member already exists under this room code' });
-      }
-      
-      data.users[leaderIdx].members.push({ name, email });
-      saveMockData(data);
-      broadcastToRoom(roomCode, { type: 'member_update' });
-      return res.status(201).json({ name, email });
-    } else {
-      const exists = await TeamMember.findOne({ email: email.toLowerCase(), roomCode });
-      if (exists) {
-        return res.status(400).json({ error: 'Member already exists under this room code' });
-      }
-      const newMember = new TeamMember(memberData);
-      await newMember.save();
-      broadcastToRoom(roomCode, { type: 'member_update' });
-      return res.status(201).json({ name: newMember.name, email: newMember.email });
-    }
   } catch (error) {
     console.error('Add member error:', error);
     return res.status(500).json({ error: 'Failed to add member' });
