@@ -779,9 +779,10 @@ app.post('/api/leader/add-member', async (req, res) => {
   if (!name || !email || !roomCode) {
     return res.status(400).json({ error: 'name, email, and roomCode are required' });
   }
-      const role = req.body.role || 'Team Member';
-      const memberData = { name, email: email.toLowerCase(), role, roomCode };
-      if (useMockDb) {
+  try {
+    const role = req.body.role || 'Team Member';
+    const memberData = { name, email: email.toLowerCase(), role, roomCode };
+    if (useMockDb) {
         const data = getMockData();
         const leaderIdx = data.users.findIndex(u => u.roomCode === roomCode);
         if (leaderIdx === -1) {
