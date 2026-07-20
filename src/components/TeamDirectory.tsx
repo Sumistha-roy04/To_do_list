@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useKanbanStore } from '../store/useKanbanStore';
 import clsx from 'clsx';
 import { Plus, Search } from 'lucide-react';
+import { getBackendUrl } from '../utils/api';
 
 interface TeamDirectoryProps {
   onAddTaskForEmployee?: (name: string) => void;
@@ -18,6 +19,7 @@ export const TeamDirectory: React.FC<TeamDirectoryProps> = ({ onAddTaskForEmploy
   const employees = useKanbanStore((state: any) => state.employees || []);
   const tasks = useKanbanStore((state: any) => state.tasks || []);
   const setEmployees = useKanbanStore((state: any) => state.setEmployees);
+  const user = useKanbanStore((state: any) => state.user);
   const [searchName, setSearchName] = useState('');
 
   const filteredEmployees = employees.filter((emp: any) => 
@@ -35,12 +37,34 @@ export const TeamDirectory: React.FC<TeamDirectoryProps> = ({ onAddTaskForEmploy
     return { activeCount, total, completed: completed.length, progress, currentTasks: active };
   };
 
-  const handleAddMember = () => {
-    const name = window.prompt('New member name');
+  const handleAddMember = async () => {
+    const name = window.prompt('New member name:');
     if (!name) return;
-    const role = window.prompt('Role / Title (optional)') || '';
-    const newEmp = { id: crypto.randomUUID(), name, role };
+    const email = window.prompt('Member email (needed for member login):');
+    if (!email) return;
+    const role = window.prompt('Role / Title (optional):') || '';
+    const newEmp = { id: crypto.randomUUID(), name, role, email };
     setEmployees([...(employees || []), newEmp]);
+
+    if (user && user.roomCode) {
+      try {
+        const res = await fetch(`${getBackendUrl()}/api/leader/add-member`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            email,
+            roomCode: user.roomCode
+          })
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          alert(data.error || 'Failed to save member to server');
+        }
+      } catch (err) {
+        console.error('Failed to sync new member to server:', err);
+      }
+    }
   };
 
   return (

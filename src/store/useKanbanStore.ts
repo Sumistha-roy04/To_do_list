@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Task, Status, Employee } from '../types';
+import { getBackendUrl } from '../utils/api';
 
 interface KanbanState {
   tasks: Task[];
@@ -39,13 +40,15 @@ export const useKanbanStore = create<KanbanState>()(
       viewMode: 'board',
       user: null,
 
-      addTask: (taskData) => set((state) => {
+      addTask: async (taskData) => {
         const now = new Date().toISOString();
+        const roomCode = useKanbanStore.getState().user?.roomCode || '';
         const newTask: Task = {
           ...taskData,
           id: crypto.randomUUID(),
           createdDate: now,
           lastUpdated: now,
+          roomCode
         };
 
         // If task created already in progress or completed, set start/completion timestamps
@@ -55,30 +58,73 @@ export const useKanbanStore = create<KanbanState>()(
         if (newTask.status === 'Completed' && !newTask.completionDate) {
           newTask.completionDate = now;
         }
-        return { tasks: [...state.tasks, newTask] };
-      }),
+        set((state) => ({ tasks: [...state.tasks, newTask] }));
 
-      updateTask: (id, updates) => set((state) => ({
-        tasks: state.tasks.map((task) =>
-          task.id === id
-            ? { ...task, ...updates, lastUpdated: new Date().toISOString() }
-            : task
-        ),
-      })),
+        if (roomCode) {
+          try {
+            await fetch(`${getBackendUrl()}/api/tasks`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(newTask)
+            });
+          } catch (err) {
+            console.error('Failed to sync addTask:', err);
+          }
+        }
+      },
 
-      deleteTask: (id) => set((state) => ({
-        tasks: state.tasks.filter((task) => task.id !== id),
-      })),
-
-      moveTask: (id, newStatus) => set((state) => {
+      updateTask: async (id, updates) => {
         const now = new Date().toISOString();
-        return {
+        const roomCode = useKanbanStore.getState().user?.roomCode || '';
+
+        set((state) => ({
+          tasks: state.tasks.map((task) =>
+            task.id === id
+              ? { ...task, ...updates, lastUpdated: now, roomCode }
+              : task
+          ),
+        }));
+
+        const updatedTask = useKanbanStore.getState().tasks.find((task) => task.id === id);
+        if (roomCode && updatedTask) {
+          try {
+            await fetch(`${getBackendUrl()}/api/tasks`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(updatedTask)
+            });
+          } catch (err) {
+            console.error('Failed to sync updateTask:', err);
+          }
+        }
+      },
+
+      deleteTask: async (id) => {
+        const roomCode = useKanbanStore.getState().user?.roomCode || '';
+        set((state) => ({
+          tasks: state.tasks.filter((task) => task.id !== id),
+        }));
+
+        if (roomCode) {
+          try {
+            await fetch(`${getBackendUrl()}/api/tasks/${id}?roomCode=${roomCode}`, {
+              method: 'DELETE'
+            });
+          } catch (err) {
+            console.error('Failed to sync deleteTask:', err);
+          }
+        }
+      },
+
+      moveTask: async (id, newStatus) => {
+        const now = new Date().toISOString();
+        const roomCode = useKanbanStore.getState().user?.roomCode || '';
+
+        set((state) => ({
           tasks: state.tasks.map((task) => {
             if (task.id !== id) return task;
             
-            // Logic for dates based on column
-            const updates: Partial<Task> = { status: newStatus, lastUpdated: now };
-            
+            const updates: Partial<Task> = { status: newStatus, lastUpdated: now, roomCode };
             if (newStatus === 'In Progress' && !task.startDate) {
               updates.startDate = now;
             }
@@ -88,8 +134,21 @@ export const useKanbanStore = create<KanbanState>()(
 
             return { ...task, ...updates };
           }),
-        };
-      }),
+        }));
+
+        const updatedTask = useKanbanStore.getState().tasks.find((task) => task.id === id);
+        if (roomCode && updatedTask) {
+          try {
+            await fetch(`${getBackendUrl()}/api/tasks`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(updatedTask)
+            });
+          } catch (err) {
+            console.error('Failed to sync moveTask:', err);
+          }
+        }
+      },
 
       setEmployees: (employees) => set({ employees }),
       setSearchQuery: (searchQuery) => set({ searchQuery }),

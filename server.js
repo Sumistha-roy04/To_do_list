@@ -36,9 +36,10 @@ const getMockData = () => {
     if (!parsed.chatMessages) parsed.chatMessages = [];
     if (!parsed.meetings) parsed.meetings = [];
     if (!parsed.documents) parsed.documents = [];
+    if (!parsed.tasks) parsed.tasks = [];
     return parsed;
   } catch {
-    return { users: [], chatMessages: [], meetings: [], documents: [] };
+    return { users: [], chatMessages: [], meetings: [], documents: [], tasks: [] };
   }
 };
 
@@ -132,6 +133,23 @@ const documentSchema = new mongoose.Schema({
 });
 
 const DocumentModel = mongoose.model('Document', documentSchema);
+
+const taskSchema = new mongoose.Schema({
+  id: { type: String, required: true },
+  title: { type: String, required: true },
+  assignedTo: { type: String, default: 'Unassigned' },
+  projectDetails: { type: String },
+  priority: { type: String, default: 'Medium' },
+  deadline: { type: String },
+  status: { type: String, default: 'To Do' },
+  createdDate: { type: Date, default: Date.now },
+  lastUpdated: { type: Date, default: Date.now },
+  startDate: { type: Date },
+  completionDate: { type: Date },
+  roomCode: { type: String, required: true }
+});
+
+const TaskModel = mongoose.model('Task', taskSchema);
 
 // Connect to MongoDB with graceful fallback
 mongoose.connect(MONGO_URI)
@@ -388,6 +406,7 @@ app.post('/api/leader/import-members', async (req, res) => {
       }));
 
       fs.writeFileSync(MOCK_DB_FILE, JSON.stringify({ users }, null, 2));
+      broadcastToRoom(roomCode, { type: 'member_update' });
       return res.status(200).json({ message: 'Members imported successfully', count: members.length });
     } else {
       const leader = await User.findOne({ roomCode });
@@ -406,6 +425,7 @@ app.post('/api/leader/import-members', async (req, res) => {
       }));
 
       await TeamMember.insertMany(membersToInsert);
+      broadcastToRoom(roomCode, { type: 'member_update' });
       return res.status(200).json({ message: 'Members imported successfully', count: members.length });
     }
   } catch (error) {
@@ -650,6 +670,146 @@ app.post('/api/collaboration/documents', async (req, res) => {
   }
 });
 
+// Get all tasks for a roomCode
+app.get('/api/tasks', async (req, res) => {
+  const { roomCode } = req.query;
+  if (!roomCode) {
+    return res.status(400).json({ error: 'roomCode is required' });
+  }
+  try {
+    if (useMockDb) {
+      const data = getMockData();
+      const tasks = data.tasks.filter(t => t.roomCode === roomCode);
+      return res.status(200).json(tasks);
+    } else {
+      const tasks = await TaskModel.find({ roomCode }).sort({ createdDate: -1 });
+      return res.status(200).json(tasks);
+    }
+  } catch (error) {
+    console.error('Fetch tasks error:', error);
+    return res.status(500).json({ error: 'Failed to fetch tasks' });
+  }
+});
+
+// Create or update (upsert) a task
+app.post('/api/tasks', async (req, res) => {
+  const task = req.body;
+  if (!task.id || !task.title || !task.roomCode) {
+    return res.status(400).json({ error: 'id, title, and roomCode are required' });
+  }
+  try {
+    let savedTask;
+    if (useMockDb) {
+      const data = getMockData();
+      const idx = data.tasks.findIndex(t => t.id === task.id);
+      if (idx !== -1) {
+        data.tasks[idx] = { ...data.tasks[idx], ...task, lastUpdated: new Date().toISOString() };
+      } else {
+        data.tasks.push({ ...task, createdDate: new Date().toISOString(), lastUpdated: new Date().toISOString() });
+      }
+      saveMockData(data);
+      savedTask = task;
+    } else {
+      savedTask = await TaskModel.findOneAndUpdate(
+        { id: task.id },
+        { ...task, lastUpdated: Date.now() },
+        { new: true, upsert: true }
+      );
+    }
+    broadcastToRoom(task.roomCode, { type: 'task_update' });
+    return res.status(200).json(savedTask);
+  } catch (error) {
+    console.error('Upsert task error:', error);
+    return res.status(500).json({ error: 'Failed to save task' });
+  }
+});
+
+// Delete a task
+app.delete('/api/tasks/:id', async (req, res) => {
+  const { id } = req.params;
+  const { roomCode } = req.query;
+  if (!id || !roomCode) {
+    return res.status(400).json({ error: 'id and roomCode are required' });
+  }
+  try {
+    if (useMockDb) {
+      const data = getMockData();
+      data.tasks = data.tasks.filter(t => !(t.id === id && t.roomCode === roomCode));
+      saveMockData(data);
+    } else {
+      await TaskModel.findOneAndDelete({ id, roomCode });
+    }
+    broadcastToRoom(roomCode, { type: 'task_update' });
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Delete task error:', error);
+    return res.status(500).json({ error: 'Failed to delete task' });
+  }
+});
+
+// Fetch team directory members for a roomCode
+app.get('/api/leader/members', async (req, res) => {
+  const { roomCode } = req.query;
+  if (!roomCode) {
+    return res.status(400).json({ error: 'roomCode is required' });
+  }
+  try {
+    if (useMockDb) {
+      const data = getMockData();
+      const users = data.users.find(u => u.roomCode === roomCode);
+      const members = users?.members || [];
+      return res.status(200).json(members);
+    } else {
+      const members = await TeamMember.find({ roomCode });
+      return res.status(200).json(members.map(m => ({ name: m.name, email: m.email })));
+    }
+  } catch (error) {
+    console.error('Fetch members error:', error);
+    return res.status(500).json({ error: 'Failed to fetch team members' });
+  }
+});
+
+// Add a single team member manually
+app.post('/api/leader/add-member', async (req, res) => {
+  const { name, email, roomCode } = req.body;
+  if (!name || !email || !roomCode) {
+    return res.status(400).json({ error: 'name, email, and roomCode are required' });
+  }
+  try {
+    const memberData = { name, email: email.toLowerCase(), roomCode };
+    if (useMockDb) {
+      const data = getMockData();
+      const leaderIdx = data.users.findIndex(u => u.roomCode === roomCode);
+      if (leaderIdx === -1) {
+        return res.status(404).json({ error: 'Leader not found' });
+      }
+      if (!data.users[leaderIdx].members) data.users[leaderIdx].members = [];
+      
+      const exists = data.users[leaderIdx].members.some(m => m.email.toLowerCase() === email.toLowerCase());
+      if (exists) {
+        return res.status(400).json({ error: 'Member already exists under this room code' });
+      }
+      
+      data.users[leaderIdx].members.push({ name, email });
+      saveMockData(data);
+      broadcastToRoom(roomCode, { type: 'member_update' });
+      return res.status(201).json({ name, email });
+    } else {
+      const exists = await TeamMember.findOne({ email: email.toLowerCase(), roomCode });
+      if (exists) {
+        return res.status(400).json({ error: 'Member already exists under this room code' });
+      }
+      const newMember = new TeamMember(memberData);
+      await newMember.save();
+      broadcastToRoom(roomCode, { type: 'member_update' });
+      return res.status(201).json({ name: newMember.name, email: newMember.email });
+    }
+  } catch (error) {
+    console.error('Add member error:', error);
+    return res.status(500).json({ error: 'Failed to add member' });
+  }
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -732,6 +892,20 @@ wss.on('connection', (ws) => {
         const { roomCode } = parsed;
         broadcastToRoom(roomCode, {
           type: 'document_update'
+        });
+      }
+
+      else if (parsed.type === 'task_update') {
+        const { roomCode } = parsed;
+        broadcastToRoom(roomCode, {
+          type: 'task_update'
+        });
+      }
+
+      else if (parsed.type === 'member_update') {
+        const { roomCode } = parsed;
+        broadcastToRoom(roomCode, {
+          type: 'member_update'
         });
       }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   DndContext, 
   DragOverlay, 
@@ -18,6 +18,7 @@ import { TaskCard } from './TaskCard';
 import { useKanbanStore } from '../store/useKanbanStore';
 import type { Status, Task } from '../types';
 import { TaskModal } from './TaskModal';
+import { getBackendUrl, getWsUrl } from '../utils/api';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { TeamDirectory } from './TeamDirectory';
@@ -58,6 +59,63 @@ export const Board: React.FC = () => {
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
+
+  // Load tasks and team directory from backend
+  const fetchBackendData = async () => {
+    if (!user || !user.roomCode) return;
+    try {
+      // 1. Fetch tasks
+      const taskRes = await fetch(`${getBackendUrl()}/api/tasks?roomCode=${user.roomCode}`);
+      if (taskRes.ok) {
+        const taskData = await taskRes.json();
+        useKanbanStore.setState({ tasks: taskData });
+      }
+
+      // 2. Fetch team members (employees)
+      const memberRes = await fetch(`${getBackendUrl()}/api/leader/members?roomCode=${user.roomCode}`);
+      if (memberRes.ok) {
+        const memberData = await memberRes.json();
+        useKanbanStore.setState({ employees: memberData });
+      }
+    } catch (err) {
+      console.error('Failed to sync backend data:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchBackendData();
+  }, [user?.roomCode]);
+
+  useEffect(() => {
+    if (!user || !user.roomCode) return;
+
+    // Connect WebSockets for live board & team updates
+    const wsUrl = getWsUrl();
+    const socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({
+        type: 'join',
+        roomCode: user.roomCode,
+        user: { fullName: user.fullName, email: user.email }
+      }));
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        if (parsed.type === 'task_update' || parsed.type === 'member_update') {
+          fetchBackendData();
+        }
+      } catch (err) {
+        console.error('Board WS message error:', err);
+      }
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, [user?.roomCode]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -134,8 +192,8 @@ export const Board: React.FC = () => {
 
   // Filter tasks
   const filteredTasks = tasks.filter(task => {
-    // If user is a Leader (role is not 'member'), restrict view to their own tasks
-    if (user && user.role !== 'member' && task.assignedTo !== user.fullName) {
+    // If user is a Member, restrict view to tasks assigned to them
+    if (user && user.role === 'member' && task.assignedTo !== user.fullName) {
       return false;
     }
 
@@ -169,8 +227,8 @@ export const Board: React.FC = () => {
 
   // Filter tasks for calendar (ignore dateFilter, but respect search and assignee)
   const calendarFilteredTasks = tasks.filter(task => {
-    // If user is a Leader (role is not 'member'), restrict view to their own tasks
-    if (user && user.role !== 'member' && task.assignedTo !== user.fullName) {
+    // If user is a Member, restrict view to tasks assigned to them
+    if (user && user.role === 'member' && task.assignedTo !== user.fullName) {
       return false;
     }
 

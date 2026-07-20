@@ -13,6 +13,7 @@ export interface Task {
   startDate?: string; // ISO date string
   completionDate?: string; // ISO date string
   lastUpdated: string; // ISO date string
+  roomCode?: string;
 }
 
 export interface ColumnType {
