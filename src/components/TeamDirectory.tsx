@@ -87,7 +87,21 @@ export const TeamDirectory: React.FC<TeamDirectoryProps> = ({ onAddTaskForEmploy
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        {filteredEmployees.length === 0 && searchName ? (
+        {employees.length === 0 ? (
+          <div className="col-span-full p-10 text-center bg-gradient-to-br from-indigo-500/5 via-purple-500/5 to-transparent dark:from-indigo-550/10 dark:via-purple-500/5 dark:to-transparent border border-dashed border-indigo-500/30 dark:border-indigo-500/20 rounded-3xl flex flex-col items-center justify-center gap-4 shadow-sm">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-650 dark:text-indigo-450 border border-indigo-500/20">
+              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </div>
+            <div className="max-w-md">
+              <h4 className="text-lg font-bold text-slate-800 dark:text-slate-100">Your Team Directory is Empty</h4>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                Please upload the employee Excel spreadsheet using the <strong className="text-indigo-650 dark:text-indigo-400">Import</strong> button in the top bar to automatically populate your team directory and assign tasks, or add members manually.
+              </p>
+            </div>
+          </div>
+        ) : filteredEmployees.length === 0 && searchName ? (
           <div className="col-span-full p-8 text-center bg-white/40 dark:bg-slate-800/20 border border-dashed border-slate-250 dark:border-slate-700/40 rounded-2xl">
             <p className="text-sm text-slate-500 dark:text-slate-400 italic">No members found matching "{searchName}"</p>
           </div>

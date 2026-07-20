@@ -31,7 +31,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({ isOpen, onClose, taskToEdi
     } else {
       // Reset form
       setTitle('');
-      setAssignedTo(employees.length > 0 ? employees[0].name : 'Unassigned');
+      setAssignedTo('Unassigned');
       setDeadline('');
       setPriority('Medium');
       setProjectDetails('');
@@ -47,7 +47,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({ isOpen, onClose, taskToEdi
 
     const taskData = {
       title,
-      assignedTo: viewMode === 'team' 
+      assignedTo: user?.role !== 'member'
         ? assignedTo 
         : (taskToEdit?.assignedTo || (user ? user.fullName : 'Unassigned')),
       deadline,
@@ -96,13 +96,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({ isOpen, onClose, taskToEdi
             />
           </div>
 
-          {viewMode === 'team' && (
+          {user?.role !== 'member' && (
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
-                Assigned To *
+                Assigned To
               </label>
               <select 
-                required
                 value={assignedTo}
                 onChange={e => setAssignedTo(e.target.value)}
                 className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-250 dark:border-slate-800 text-slate-700 dark:text-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-sm outline-none cursor-pointer transition-all"

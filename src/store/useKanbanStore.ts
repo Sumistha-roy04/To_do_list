@@ -156,8 +156,24 @@ export const useKanbanStore = create<KanbanState>()(
       setDateFilter: (dateFilter) => set({ dateFilter }),
       setViewMode: (viewMode) => set({ viewMode }),
       toggleTheme: () => set((state) => ({ theme: state.theme === 'light' ? 'dark' : 'light' })),
-      registerUser: (user) => set({ user }),
-      logoutUser: () => set({ user: null }),
+      registerUser: (user) => set({ 
+        user,
+        tasks: [],
+        employees: [],
+        searchQuery: '',
+        assigneeFilter: '',
+        dateFilter: 'all',
+        viewMode: 'board'
+      }),
+      logoutUser: () => set({ 
+        user: null,
+        tasks: [],
+        employees: [],
+        searchQuery: '',
+        assigneeFilter: '',
+        dateFilter: 'all',
+        viewMode: 'board'
+      }),
     }),
     {
       name: 'kanban-storage',
