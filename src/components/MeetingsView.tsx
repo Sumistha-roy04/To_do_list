@@ -36,9 +36,26 @@ export const MeetingsView: React.FC = () => {
   const [isAudioOn, setIsAudioOn] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+
+  const rtcConfig: RTCConfiguration = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  };
+
+  // Bind remote stream to HTML video element
+  useEffect(() => {
+    if (remoteStream && remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
 
   // Fetch Meetings
   const fetchMeetings = async () => {
@@ -59,7 +76,104 @@ export const MeetingsView: React.FC = () => {
     }
   }, [roomCode]);
 
-  // Connect WebSockets for live meeting updates
+  // WebRTC Handshake & Signaling Helpers
+  const createPeerConnection = (remoteEmail: string): RTCPeerConnection => {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+    }
+    
+    const pc = new RTCPeerConnection(rtcConfig);
+    peerConnectionRef.current = pc;
+    
+    // Add local tracks
+    const stream = localStream || (localVideoRef.current?.srcObject as MediaStream);
+    if (stream) {
+      stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+      });
+    }
+    
+    pc.onicecandidate = (event) => {
+      if (event.candidate && wsRef.current && wsRef.current.readyState === 1) {
+        wsRef.current.send(JSON.stringify({
+          type: 'signal',
+          roomCode,
+          targetEmail: remoteEmail,
+          senderEmail: user?.email,
+          signal: { type: 'candidate', candidate: event.candidate }
+        }));
+      }
+    };
+    
+    pc.ontrack = (event) => {
+      if (event.streams && event.streams[0]) {
+        setRemoteStream(event.streams[0]);
+      }
+    };
+    
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        setRemoteStream(null);
+      }
+    };
+    
+    return pc;
+  };
+
+  const initiateCall = async (remoteEmail: string) => {
+    const pc = createPeerConnection(remoteEmail);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    
+    wsRef.current?.send(JSON.stringify({
+      type: 'signal',
+      roomCode,
+      targetEmail: remoteEmail,
+      senderEmail: user?.email,
+      signal: { type: 'offer', offer }
+    }));
+  };
+
+  const handleOffer = async (remoteEmail: string, offer: RTCSessionDescriptionInit) => {
+    const pc = createPeerConnection(remoteEmail);
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    
+    wsRef.current?.send(JSON.stringify({
+      type: 'signal',
+      roomCode,
+      targetEmail: remoteEmail,
+      senderEmail: user?.email,
+      signal: { type: 'answer', answer }
+    }));
+  };
+
+  const handleAnswer = async (answer: RTCSessionDescriptionInit) => {
+    if (peerConnectionRef.current) {
+      await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+  };
+
+  const handleCandidate = async (candidate: RTCIceCandidateInit) => {
+    if (peerConnectionRef.current) {
+      try {
+        await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.error('Error adding ICE candidate:', err);
+      }
+    }
+  };
+
+  const handleRemotePeerLeave = () => {
+    setRemoteStream(null);
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+  };
+
+  // Connect WebSockets for live meeting updates & WebRTC signaling
   useEffect(() => {
     if (!roomCode) return;
     const wsUrl = getWsUrl();
@@ -75,21 +189,34 @@ export const MeetingsView: React.FC = () => {
       }));
     };
 
-    socket.onmessage = (event) => {
+    socket.onmessage = async (event) => {
       try {
         const parsed = JSON.parse(event.data);
         if (parsed.type === 'meeting_update') {
           fetchMeetings();
+        } else if (parsed.type === 'signal') {
+          const { senderEmail, signal } = parsed;
+          if (signal.type === 'join') {
+            await initiateCall(senderEmail);
+          } else if (signal.type === 'offer') {
+            await handleOffer(senderEmail, signal.offer);
+          } else if (signal.type === 'answer') {
+            await handleAnswer(signal.answer);
+          } else if (signal.type === 'candidate') {
+            await handleCandidate(signal.candidate);
+          } else if (signal.type === 'leave') {
+            handleRemotePeerLeave();
+          }
         }
       } catch (e) {
-        // ignore
+        console.error('WS message parsing error:', e);
       }
     };
 
     return () => {
       socket.close();
     };
-  }, [roomCode]);
+  }, [roomCode, localStream]);
 
   // Camera & Audio Control
   const startCamera = async () => {
@@ -107,8 +234,10 @@ export const MeetingsView: React.FC = () => {
       }
       setIsVideoOn(true);
       setIsAudioOn(true);
+      return stream;
     } catch (err) {
       console.warn('Could not get local media stream:', err);
+      return null;
     }
   };
 
@@ -146,10 +275,27 @@ export const MeetingsView: React.FC = () => {
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = screenStream;
         }
+        
+        // Replace video track in RTCPeerConnection if active
+        if (peerConnectionRef.current) {
+          const senders = peerConnectionRef.current.getSenders();
+          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+          if (videoSender) {
+            videoSender.replaceTrack(screenStream.getVideoTracks()[0]);
+          }
+        }
+
         screenStream.getVideoTracks()[0].onended = () => {
           setIsScreenSharing(false);
           if (localVideoRef.current && localStream) {
             localVideoRef.current.srcObject = localStream;
+            if (peerConnectionRef.current) {
+              const senders = peerConnectionRef.current.getSenders();
+              const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+              if (videoSender) {
+                videoSender.replaceTrack(localStream.getVideoTracks()[0]);
+              }
+            }
           }
         };
         setIsScreenSharing(true);
@@ -160,6 +306,13 @@ export const MeetingsView: React.FC = () => {
       setIsScreenSharing(false);
       if (localVideoRef.current && localStream) {
         localVideoRef.current.srcObject = localStream;
+        if (peerConnectionRef.current) {
+          const senders = peerConnectionRef.current.getSenders();
+          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+          if (videoSender) {
+            videoSender.replaceTrack(localStream.getVideoTracks()[0]);
+          }
+        }
       }
     }
   };
@@ -167,7 +320,17 @@ export const MeetingsView: React.FC = () => {
   const handleJoinCall = async (meeting: Meeting) => {
     setActiveCallMeeting(meeting);
     setIsInCall(true);
-    await startCamera();
+    const stream = await startCamera();
+    
+    // Broadcast join signal to others in the room
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({
+        type: 'signal',
+        roomCode,
+        senderEmail: user?.email,
+        signal: { type: 'join' }
+      }));
+    }
     
     // Update status to Live if it's upcoming
     if (meeting.status === 'upcoming') {
@@ -187,6 +350,21 @@ export const MeetingsView: React.FC = () => {
   };
 
   const handleLeaveCall = async () => {
+    // Notify remote peers that we are leaving
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({
+        type: 'signal',
+        roomCode,
+        senderEmail: user?.email,
+        signal: { type: 'leave' }
+      }));
+    }
+
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    setRemoteStream(null);
     stopCamera();
     setIsInCall(false);
     
@@ -253,36 +431,13 @@ export const MeetingsView: React.FC = () => {
     });
   };
 
-  return (
-    <div className="flex-1 flex flex-col gap-6 overflow-y-auto max-h-[calc(100vh-120px)] custom-scrollbar pr-2">
-      
-      {/* Video Call Interface */}
-      <div className={`rounded-3xl border overflow-hidden p-6 ${
-        theme === 'dark'
-          ? 'bg-slate-900/40 border-slate-800 text-slate-100'
-          : 'bg-white border-slate-200 text-slate-900'
-      } shadow-xl backdrop-blur-xl`}>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <VideoIcon className="w-5 h-5 text-indigo-500" />
-            <h2 className="font-bold text-lg">
-              {isInCall ? `Active Call: ${activeCallMeeting?.title}` : 'Video Conference'}
-            </h2>
-          </div>
-          {isInCall && (
-            <span className="px-3 py-1 bg-rose-500/20 text-rose-500 text-xs font-bold rounded-full animate-pulse">
-              LIVE
-            </span>
-          )}
-        </div>
-
         {isInCall ? (
           /* ACTIVE VIDEO CALL LAYOUT */
           <div className="flex flex-col gap-4">
             {/* Grid of video streams */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-[350px]">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[460px] md:h-[400px]">
               {/* Local Stream */}
-              <div className="relative rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center border border-indigo-500/30">
+              <div className="relative rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center border border-indigo-500/30 h-[220px] md:h-full">
                 {localStream && isVideoOn ? (
                   <video 
                     ref={localVideoRef} 
@@ -293,43 +448,52 @@ export const MeetingsView: React.FC = () => {
                   />
                 ) : (
                   <div className="flex flex-col items-center gap-2 text-slate-400">
-                    <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center text-xl font-bold">
+                    <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center text-xl font-bold border border-slate-700/30">
                       {user?.fullName[0].toUpperCase()}
                     </div>
-                    <span className="text-xs">Your Video is Off</span>
+                    <span className="text-xs font-medium">Your Video is Off</span>
                   </div>
                 )}
-                <div className="absolute bottom-3 left-3 bg-black/60 px-3 py-1 rounded-xl text-xs text-white backdrop-blur-sm">
+                <div className="absolute bottom-3 left-3 bg-black/60 px-3 py-1 rounded-xl text-xs text-white backdrop-blur-sm font-semibold">
                   You ({user?.fullName})
                 </div>
               </div>
 
-              {/* Remote Participants (Simulated / Co-presence) */}
-              <div className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-slate-950 to-slate-900 flex items-center justify-center border border-slate-800">
-                <div className="flex flex-col items-center gap-3 text-slate-400">
-                  <div className="relative">
-                    <div className="w-16 h-16 rounded-full bg-indigo-600/30 flex items-center justify-center text-indigo-400 text-xl font-bold border border-indigo-500/40">
-                      <User className="w-8 h-8" />
+              {/* Remote Participant Stream */}
+              <div className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-slate-950 to-slate-900 flex items-center justify-center border border-slate-800 h-[220px] md:h-full">
+                {remoteStream ? (
+                  <video 
+                    ref={remoteVideoRef} 
+                    autoPlay 
+                    playsInline 
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center gap-3 text-slate-400 p-4 text-center">
+                    <div className="relative">
+                      <div className="w-16 h-16 rounded-full bg-indigo-650/20 flex items-center justify-center text-indigo-400 text-xl font-bold border border-indigo-500/20">
+                        <User className="w-8 h-8" />
+                      </div>
+                      <span className="absolute bottom-0 right-0 w-3 h-3 bg-slate-650 border-2 border-slate-950 rounded-full"></span>
                     </div>
-                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-slate-950 rounded-full"></span>
+                    <div className="text-center max-w-[200px]">
+                      <p className="text-sm font-semibold text-slate-200">Remote Participant</p>
+                      <p className="text-xs opacity-75 mt-0.5 leading-snug">Waiting for peer connection...</p>
+                    </div>
                   </div>
-                  <div className="text-center">
-                    <p className="text-sm font-semibold text-slate-200">Other Team Members</p>
-                    <p className="text-xs opacity-75 mt-0.5">Waiting for peers to join this room...</p>
-                  </div>
-                </div>
-                <div className="absolute bottom-3 left-3 bg-black/60 px-3 py-1 rounded-xl text-xs text-white backdrop-blur-sm">
-                  Workspace Feed (Room {roomCode})
+                )}
+                <div className="absolute bottom-3 left-3 bg-black/60 px-3 py-1 rounded-xl text-xs text-white backdrop-blur-sm font-semibold">
+                  Remote (Room {roomCode})
                 </div>
               </div>
             </div>
 
             {/* Video Controls Bar */}
-            <div className="flex justify-center gap-4 py-2 mt-2">
+            <div className="flex flex-wrap justify-center items-center gap-3 md:gap-4 py-2.5 mt-2 bg-slate-950/20 dark:bg-slate-950/40 rounded-2xl border border-slate-800/10 dark:border-slate-800/60 p-3">
               <button
                 onClick={toggleAudio}
-                title={isAudioOn ? 'Mute' : 'Unmute'}
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all cursor-pointer ${
+                title={isAudioOn ? 'Mute Mic' : 'Unmute Mic'}
+                className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl flex items-center justify-center transition-all cursor-pointer ${
                   isAudioOn 
                     ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' 
                     : 'bg-rose-600 hover:bg-rose-500 text-white'
@@ -339,8 +503,8 @@ export const MeetingsView: React.FC = () => {
               </button>
               <button
                 onClick={toggleVideo}
-                title={isVideoOn ? 'Stop Camera' : 'Start Camera'}
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all cursor-pointer ${
+                title={isVideoOn ? 'Stop Video' : 'Start Video'}
+                className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl flex items-center justify-center transition-all cursor-pointer ${
                   isVideoOn 
                     ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' 
                     : 'bg-rose-600 hover:bg-rose-500 text-white'
@@ -350,10 +514,10 @@ export const MeetingsView: React.FC = () => {
               </button>
               <button
                 onClick={toggleScreenShare}
-                title="Share Screen"
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all cursor-pointer ${
+                title={isScreenSharing ? 'Stop Share' : 'Share Screen'}
+                className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl flex items-center justify-center transition-all cursor-pointer ${
                   isScreenSharing 
-                    ? 'bg-indigo-650 hover:bg-indigo-750 text-white' 
+                    ? 'bg-indigo-650 hover:bg-indigo-750 text-white animate-pulse' 
                     : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
                 }`}
               >
@@ -361,19 +525,20 @@ export const MeetingsView: React.FC = () => {
               </button>
               <button
                 onClick={handleLeaveCall}
-                title="End Call"
-                className="w-12 h-12 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center transition-all cursor-pointer"
+                title="Decline / End Call"
+                className="px-4 h-11 md:h-13 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-rose-600/10 font-bold text-xs md:text-sm active:scale-[0.98]"
               >
-                <PhoneOff className="w-5 h-5" />
+                <PhoneOff className="w-4 h-4 md:w-5 md:h-5" />
+                <span>Decline</span>
               </button>
             </div>
           </div>
         ) : (
           /* IDLE PREVIEW LAYOUT */
-          <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-700/20 dark:border-slate-800 rounded-2xl p-12 text-center text-slate-500 gap-3 bg-slate-500/5">
-            <VideoIcon className="w-12 h-12 opacity-30 text-indigo-500" />
-            <h3 className="font-bold text-slate-300">No Active Meeting Joined</h3>
-            <p className="text-sm max-w-md opacity-75">
+          <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-700/10 dark:border-slate-800/80 rounded-2xl p-8 md:p-12 text-center text-slate-500 gap-3 bg-slate-500/5">
+            <VideoIcon className="w-12 h-12 opacity-35 text-indigo-500" />
+            <h3 className="font-bold text-slate-700 dark:text-slate-300">No Active Meeting Joined</h3>
+            <p className="text-xs md:text-sm max-w-sm md:max-w-md opacity-85 leading-relaxed">
               Launch or join one of your scheduled workspace meetings below to kickstart a voice/video call with your team members.
             </p>
           </div>
@@ -384,19 +549,19 @@ export const MeetingsView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         
         {/* Scheduled List Section */}
-        <div className={`lg:col-span-2 rounded-3xl border p-6 flex flex-col gap-4 ${
+        <div className={`lg:col-span-2 rounded-3xl border p-4 md:p-6 flex flex-col gap-4 ${
           theme === 'dark'
             ? 'bg-slate-900/40 border-slate-800 text-slate-100'
             : 'bg-white border-slate-200 text-slate-900'
         } shadow-xl backdrop-blur-xl`}>
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800/10 dark:border-slate-100/10">
-            <h3 className="font-bold text-lg flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 border-b border-slate-800/10 dark:border-slate-100/10 gap-3">
+            <h3 className="font-bold text-base md:text-lg flex items-center gap-2">
               <Calendar className="w-5 h-5 text-indigo-500" />
               Workspace Meetings
             </h3>
             <button
               onClick={() => setShowScheduleForm(!showScheduleForm)}
-              className="px-3.5 py-1.5 bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-600/15"
+              className="w-full sm:w-auto px-3.5 py-2 bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-indigo-600/15"
             >
               <Plus className="w-4 h-4" />
               Schedule Meeting
@@ -406,8 +571,8 @@ export const MeetingsView: React.FC = () => {
           <div className="space-y-3 max-h-[350px] overflow-y-auto custom-scrollbar">
             {meetings.length === 0 ? (
               <div className="py-12 flex flex-col items-center justify-center text-slate-500 gap-2">
-                <AlertCircle className="w-8 h-8 opacity-40 text-indigo-500" />
-                <p className="text-sm font-medium">No meetings scheduled for this workspace.</p>
+                <AlertCircle className="w-8 h-8 opacity-45 text-indigo-500" />
+                <p className="text-xs md:text-sm font-medium">No meetings scheduled for this workspace.</p>
               </div>
             ) : (
               meetings.map((meet) => (
@@ -431,12 +596,12 @@ export const MeetingsView: React.FC = () => {
                           ? 'bg-slate-500/20 text-slate-500'
                           : 'bg-indigo-500/10 text-indigo-500'
                     }`}>
-                      <Video className="w-5 h-5" />
+                      <VideoIcon className="w-5 h-5" />
                     </div>
                     <div>
                       <h4 className="font-bold text-sm leading-snug">{meet.title}</h4>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 text-xs mt-1">
-                        <span className="flex items-center gap-1">
+                        <span className="flex items-center gap-1 font-medium">
                           <Clock className="w-3.5 h-3.5" />
                           {formatMeetingTime(meet.scheduledTime)} ({meet.duration} mins)
                         </span>
@@ -446,11 +611,11 @@ export const MeetingsView: React.FC = () => {
                     </div>
                   </div>
 
-                  <div>
+                  <div className="w-full sm:w-auto shrink-0 flex justify-end">
                     {meet.status === 'live' ? (
                       <button
                         onClick={() => handleJoinCall(meet)}
-                        className="px-4 py-2 bg-emerald-650 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1"
+                        className="w-full sm:w-auto px-4 py-2 bg-emerald-650 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1"
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
                         Join Call
@@ -463,7 +628,7 @@ export const MeetingsView: React.FC = () => {
                     ) : (
                       <button
                         onClick={() => handleJoinCall(meet)}
-                        className="px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1"
+                        className="w-full sm:w-auto px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1"
                       >
                         Start Now
                       </button>
@@ -477,7 +642,7 @@ export const MeetingsView: React.FC = () => {
 
         {/* Schedule Form Panel */}
         {showScheduleForm && (
-          <div className={`rounded-3xl border p-6 flex flex-col gap-4 ${
+          <div className={`rounded-3xl border p-5 md:p-6 flex flex-col gap-4 ${
             theme === 'dark'
               ? 'bg-slate-900/40 border-slate-800 text-slate-100'
               : 'bg-white border-slate-200 text-slate-900'
@@ -486,7 +651,7 @@ export const MeetingsView: React.FC = () => {
             
             <form onSubmit={handleScheduleMeeting} className="flex flex-col gap-3.5">
               <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Meeting Title</label>
+                <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Meeting Title</label>
                 <input
                   type="text"
                   placeholder="e.g. Daily Standup"
@@ -500,7 +665,7 @@ export const MeetingsView: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Date & Time</label>
+                <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Date & Time</label>
                 <input
                   type="datetime-local"
                   required
@@ -513,7 +678,7 @@ export const MeetingsView: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Duration (Minutes)</label>
+                <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Duration (Minutes)</label>
                 <select
                   value={newDuration}
                   onChange={(e) => setNewDuration(e.target.value)}
@@ -529,7 +694,7 @@ export const MeetingsView: React.FC = () => {
                 </select>
               </div>
 
-              <div className="flex gap-3 mt-1.5">
+              <div className="flex gap-3 mt-1.5 font-semibold">
                 <button
                   type="button"
                   onClick={() => setShowScheduleForm(false)}
